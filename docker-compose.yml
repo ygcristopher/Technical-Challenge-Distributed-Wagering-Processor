@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: wagering
+      POSTGRES_USER: wagering
+      POSTGRES_PASSWORD: wagering
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U wagering -d wagering']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ministack:
+    image: ministackorg/ministack:latest
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      SERVICES: sqs
+      PERSIST_STATE: '1'
+      STATE_DIR: /tmp/ministack-state
+    ports:
+      - '4566:4566'
+    volumes:
+      - ministack_data:/tmp/ministack-state
+      - ./infra/ministack/init-queues.sh:/etc/localstack/init/ready.d/init-queues.sh:ro
+
+volumes:
+  postgres_data:
+  ministack_data:
