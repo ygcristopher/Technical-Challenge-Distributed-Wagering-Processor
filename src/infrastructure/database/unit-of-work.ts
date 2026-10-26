@@ -6,6 +6,7 @@ import { WalletLedgerEntryRepository } from './repositories/wallet-ledger-entry.
 import { WalletRepository } from './repositories/wallet.repository.js';
 
 export class PersistenceContext {
+  private readonly em: EntityManager;
   readonly wallets: WalletRepository;
   readonly transactions: WagerTransactionRepository;
   readonly ledger: WalletLedgerEntryRepository;
@@ -13,6 +14,7 @@ export class PersistenceContext {
   readonly outbox: OutboxMessageRepository;
 
   constructor(em: EntityManager) {
+    this.em = em;
     this.wallets = new WalletRepository(em);
     this.transactions = new WagerTransactionRepository(em);
     this.ledger = new WalletLedgerEntryRepository(em);
@@ -21,7 +23,7 @@ export class PersistenceContext {
   }
 
   async flush(): Promise<void> {
-    await this.wallets['em'].flush();
+    await this.em.flush();
   }
 }
 
