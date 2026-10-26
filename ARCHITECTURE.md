@@ -25,10 +25,16 @@ Docker Compose starts PostgreSQL and MiniStack. MiniStack creates the FIFO event
 
 `Money` uses `decimal.js` internally and accepts only non-negative decimal strings with at most two fractional places at input boundaries. It never stores monetary values as JavaScript `number`; serialized events use `{ amount: string, currency: string }`.
 
+## Persistence boundary
+
+MikroORM entities under `src/infrastructure/database/entities` represent database rows only. They do not contain business behavior. Mappers under `src/infrastructure/database/mappers` convert numeric columns to `Money` and reconstruct domain aggregates through their `rehydrate` factories.
+
+Repositories receive the transaction-scoped `EntityManager` and expose domain objects. Reads that participate in a state change use `PESSIMISTIC_WRITE`; outbox batch reads use the partial pessimistic lock so concurrent workers can claim disjoint rows. `UnitOfWork` wraps the callback in `EntityManager.transactional`, and an explicit `flush` is available when scalar foreign-key entities must be inserted in dependency order.
+
 ## Failure codes
 
 The initial stable business codes are `INSUFFICIENT_FUNDS`, `INSUFFICIENT_FUNDS_FOR_REVERSAL`, `CURRENCY_MISMATCH`, `REFERENCE_NOT_FOUND`, `INVALID_REFERENCE_KIND`, `ALREADY_REVERSED`, `INVALID_PAYLOAD` and `WALLET_NOT_FOUND`.
 
 ## Known limitations at this stage
 
-No financial behavior, persistence schema, SQS consumer, outbox publisher, or authentication has been implemented yet. Those are deliberately introduced in the subsequent stages with integration tests against real PostgreSQL and SQS-compatible infrastructure.
+The application use case, HTTP financial endpoints, SQS consumer and outbox publisher have not been implemented yet. Persistence now has the repository and transaction boundary needed by those stages, with integration coverage against real PostgreSQL. Authentication remains intentionally out of scope.
