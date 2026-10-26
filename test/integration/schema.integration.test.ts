@@ -6,7 +6,7 @@ const connectionString = process.env.DATABASE_URL ?? 'postgresql://wagering:wage
 let client: Client;
 let savepointNumber = 0;
 
-async function expectConstraintFailure(query: string, values: readonly unknown[]): Promise<void> {
+async function expectConstraintFailure(query: string, values: unknown[]): Promise<void> {
   const savepoint = `constraint_failure_${savepointNumber++}`;
   await client.query(`SAVEPOINT ${savepoint}`);
   await expect(client.query(query, values)).rejects.toBeDefined();
