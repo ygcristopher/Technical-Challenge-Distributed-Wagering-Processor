@@ -1,0 +1,5 @@
+{
+  "terminal.integrated.env.windows": {
+    "Path": "C:\\npm-global\\node_modules\\bun\\bin;${env:Path}"
+  }
+}
