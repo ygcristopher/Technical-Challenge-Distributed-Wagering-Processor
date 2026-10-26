@@ -1,6 +1,6 @@
 import { Entity, PrimaryKey, Property } from '@mikro-orm/core';
 
-/** Persistence model; the domain Wallet will be introduced separately. */
+/** Persistence model; the domain Wallet remains independent from MikroORM. */
 @Entity({ tableName: 'wallets' })
 export class WalletEntity {
   @PrimaryKey({ type: 'uuid' })
