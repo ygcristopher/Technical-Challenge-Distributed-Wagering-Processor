@@ -31,7 +31,6 @@ export class OutboxMessageRepository {
       { lockMode: LockMode.PESSIMISTIC_WRITE },
     );
     if (entity) {
-      MessagesMapper.outboxToEntity(message);
       const updated = MessagesMapper.outboxToEntity(message);
       Object.assign(entity, updated);
       return;
