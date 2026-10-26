@@ -14,7 +14,7 @@
     "forceConsistentCasingInFileNames": true,
     "outDir": "dist",
     "sourceMap": true,
-    "types": ["node"]
+    "types": ["node", "bun-types"]
   },
   "include": ["src/**/*.ts", "test/**/*.ts"],
   "exclude": ["node_modules", "dist"]
