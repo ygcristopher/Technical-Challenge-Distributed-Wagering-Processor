@@ -13,9 +13,21 @@
 
 Docker Compose starts PostgreSQL and MiniStack. MiniStack creates the FIFO event queue and its FIFO DLQ from `infra/localstack/init-queues.sh`; the legacy directory name is retained because MiniStack supports the compatible init-script path.
 
-## State transitions
+## Domain state transitions
 
-The transaction state machine and failure taxonomy will be expanded with the domain and use-case stages. The initial application only exposes liveness/readiness placeholders.
+`WagerTransaction` starts in `PENDING`. A transaction may move to `PENDING_REFERENCE` when a required external reference is not available. From either non-terminal state it may become `PROCESSED`, `REJECTED` or `FAILED`. Those three states are terminal and any later transition is a programming error.
+
+`InboxMessage` moves once from received to processed. `OutboxMessage` remains pending while `publishedAt` is absent; failed publication increments attempts and schedules exponential backoff. After broker confirmation it becomes published and cannot be retried.
+
+`Wallet` owns the materialized balance and increments its version only after a successful debit or credit. `WalletLedgerEntry` is immutable and records the before/after values needed to reconstruct the balance.
+
+## Money representation
+
+`Money` uses `decimal.js` internally and accepts only non-negative decimal strings with at most two fractional places at input boundaries. It never stores monetary values as JavaScript `number`; serialized events use `{ amount: string, currency: string }`.
+
+## Failure codes
+
+The initial stable business codes are `INSUFFICIENT_FUNDS`, `INSUFFICIENT_FUNDS_FOR_REVERSAL`, `CURRENCY_MISMATCH`, `REFERENCE_NOT_FOUND`, `INVALID_REFERENCE_KIND`, `ALREADY_REVERSED`, `INVALID_PAYLOAD` and `WALLET_NOT_FOUND`.
 
 ## Known limitations at this stage
 
