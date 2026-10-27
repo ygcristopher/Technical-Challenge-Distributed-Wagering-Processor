@@ -35,6 +35,10 @@ Repositories receive the transaction-scoped `EntityManager` and expose domain ob
 
 The initial stable business codes are `INSUFFICIENT_FUNDS`, `INSUFFICIENT_FUNDS_FOR_REVERSAL`, `CURRENCY_MISMATCH`, `REFERENCE_NOT_FOUND`, `INVALID_REFERENCE_KIND`, `ALREADY_REVERSED`, `INVALID_PAYLOAD` and `WALLET_NOT_FOUND`.
 
+## Transaction application service
+
+`ProcessWagerTransactionUseCase` is the shared application boundary for HTTP and SQS. It creates the persistent transaction before applying the effect, locks the wallet with `PESSIMISTIC_WRITE`, writes the ledger and outbox in the same SQL transaction, and returns a typed `Result` for business outcomes. A unique-key race is resolved by reopening the transaction and replaying the row that won the insert. The current stage covers `BET`, `WIN` and `LOSS`; reference resolution for `REFUND` and `ROLLBACK` is intentionally completed in the next stage.
+
 ## Known limitations at this stage
 
-The application use case, HTTP financial endpoints, SQS consumer and outbox publisher have not been implemented yet. Persistence now has the repository and transaction boundary needed by those stages, with integration coverage against real PostgreSQL. Authentication remains intentionally out of scope.
+HTTP financial endpoints, SQS consumer and outbox publisher have not been implemented yet. Persistence and the core transaction use case now have integration coverage against real PostgreSQL. Authentication remains intentionally out of scope.
