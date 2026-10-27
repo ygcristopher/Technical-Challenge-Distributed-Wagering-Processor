@@ -45,4 +45,10 @@ The initial stable business codes are `INSUFFICIENT_FUNDS`, `INSUFFICIENT_FUNDS_
 
 ## Known limitations at this stage
 
-HTTP financial endpoints, SQS consumer and outbox publisher have not been implemented yet. Persistence, the core transaction use case and pending-reference worker now have integration coverage against real PostgreSQL. Authentication remains intentionally out of scope.
+SQS consumer and outbox publisher have not been implemented yet. Persistence, the core transaction use case, pending-reference worker and HTTP boundary now have integration/manual coverage against real PostgreSQL. Authentication remains intentionally out of scope.
+
+## HTTP boundary
+
+`WalletController` exposes wallet creation, lookup, cursor-paginated ledger and reconciliation. A positive initial wallet balance creates an internal processed `OPENING` transaction and immutable credit entry, so reconciliation can reconstruct the materialized balance from the ledger. `WageringController` requires the `Idempotency-Key` header, hashes the canonical JSON body with SHA-256, delegates to the shared use case and maps `PROCESSED` to 201/200, `PENDING_REFERENCE` to 202, rejected business outcomes to 422, payload conflicts to 409, validation to 400 and persistence unavailability to 503.
+
+Ledger cursors are base64url-encoded JSON containing only the last entry id. The cursor is opaque at the API boundary and is decoded/validated before reaching the repository. The no-op authentication guard remains active because authentication is outside the challenge scope.
