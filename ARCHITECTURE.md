@@ -11,7 +11,7 @@
 
 ## Local infrastructure
 
-Docker Compose starts PostgreSQL and MiniStack. MiniStack creates the FIFO event queue and its FIFO DLQ from `infra/localstack/init-queues.sh`; the legacy directory name is retained because MiniStack supports the compatible init-script path.
+Docker Compose starts PostgreSQL and MiniStack. MiniStack creates the FIFO command queue, FIFO event queue and FIFO DLQ from `infra/ministack/init-queues.sh`.
 
 ## Domain state transitions
 
@@ -34,6 +34,12 @@ Repositories receive the transaction-scoped `EntityManager` and expose domain ob
 ## Failure codes
 
 The initial stable business codes are `INSUFFICIENT_FUNDS`, `INSUFFICIENT_FUNDS_FOR_REVERSAL`, `CURRENCY_MISMATCH`, `REFERENCE_NOT_FOUND`, `INVALID_REFERENCE_KIND`, `ALREADY_REVERSED`, `INVALID_PAYLOAD` and `WALLET_NOT_FOUND`.
+
+## Failure taxonomy and idempotency hash
+
+Business rejection codes are stable and persisted with the transaction: `INSUFFICIENT_FUNDS` for a BET without balance, `INSUFFICIENT_FUNDS_FOR_REVERSAL` when a rollback cannot be covered, `CURRENCY_MISMATCH` for incompatible wallet/reference currencies, `REFERENCE_NOT_FOUND` after pending-reference exhaustion, `INVALID_REFERENCE_KIND` for an unsupported reversal target, `ALREADY_REVERSED` for a second accepted reversal, `INVALID_PAYLOAD` for invalid command data and `WALLET_NOT_FOUND` when the target wallet does not exist. These outcomes are deterministic and normally map to HTTP 422.
+
+The HTTP boundary computes `SHA-256(JSON.stringify(body))` and stores the lowercase hexadecimal digest together with `(provider_id, idempotency_key)`. A repeated key with the same digest is a replay; the original transaction result is returned with `idempotentReplay=true`. A repeated key with another digest is an idempotency conflict and maps to HTTP 409. SQS commands use the SHA-256 digest of the received message body, preserving the exact provider message identity across redeliveries.
 
 ## Transaction application service
 
@@ -66,6 +72,14 @@ The consumer starts with the NestJS application unless `SQS_CONSUMER_ENABLED=fal
 `JsonLogger` emits one JSON object per application event with timestamp, level, event name and safe identifiers such as `correlationId`, `messageId`, `transactionId` and `walletId`. Financial payloads and complete message bodies are deliberately excluded.
 
 `MetricsRegistry` exposes counters, gauges and latency summaries in Prometheus text format at `GET /metrics`. The current metrics include transaction status, duplicate/replay count, retry count by component, SQS failures and DLQ candidates, database lock conflicts, outbox lag and operation latency. Labels are normalized and escaped before rendering.
+
+## Worker limits and shutdown behavior
+
+The outbox publisher claims at most `OUTBOX_PUBLISHER_BATCH_SIZE` rows per cycle and retries failed sends using persisted exponential backoff. `SKIP LOCKED` prevents multiple instances from claiming the same row, while the database transaction keeps the claim and publication state update together. A crash after broker acceptance and before the database commit can publish again; this is intentionally handled as at-least-once delivery.
+
+The SQS consumer uses long polling, a configurable visibility timeout and `SQS_CONSUMER_BATCH_SIZE`. It deletes a message only after the inbox record and financial effect commit. Shutdown stops new receives, aborts the receive loop and waits for the active handler before closing resources. Poison messages remain available for redelivery until the queue redrive policy moves them to the DLQ.
+
+The pending-reference worker claims due rows with `FOR UPDATE SKIP LOCKED`, increments attempts transactionally and schedules exponential backoff. It stops retrying after eight attempts or one hour of age. These limits bound database work and make `REFERENCE_NOT_FOUND` observable instead of leaving transactions pending forever.
 
 ## Multi-process validation
 

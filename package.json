@@ -13,11 +13,11 @@
     "start": "bun src/main.ts",
     "test": "bun test",
     "test:watch": "bun test --watch",
-    "lint": "eslint ."
-    ,"migration:create": "mikro-orm migration:create"
-    ,"migration:up": "mikro-orm migration:up --config dist/infrastructure/database/mikro-orm.config.js"
-    ,"migration:down": "mikro-orm migration:down --config dist/infrastructure/database/mikro-orm.config.js"
-    ,"test:integration": "bun run build && bun run migration:up && bun test ./test/integration"
+    "lint": "eslint .",
+    "migration:create": "mikro-orm migration:create",
+    "migration:up": "mikro-orm migration:up --config dist/infrastructure/database/mikro-orm.config.js",
+    "migration:down": "mikro-orm migration:down --config dist/infrastructure/database/mikro-orm.config.js",
+    "test:integration": "bun run build && bun run migration:up && bun test ./test/integration"
   },
   "dependencies": {
     "@mikro-orm/core": "^6.4.0",
