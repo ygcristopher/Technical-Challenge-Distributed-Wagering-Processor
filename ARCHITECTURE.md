@@ -43,9 +43,17 @@ The initial stable business codes are `INSUFFICIENT_FUNDS`, `INSUFFICIENT_FUNDS_
 
 `REFUND` and `ROLLBACK` are initially stored as `PENDING_REFERENCE`. `PendingReferenceWorker` claims due rows using the partial pessimistic lock (`FOR UPDATE SKIP LOCKED`), locks the referenced transaction, and applies the reversal and outbox events in the same SQL transaction. Missing or still-pending references use persisted attempts and exponential backoff. Eight attempts or one hour of age produces `REJECTED` with `REFERENCE_NOT_FOUND`. A processed reference is required; `REFUND` accepts a `BET`, while `ROLLBACK` inverts a processed balance effect and maps insufficient balance to `INSUFFICIENT_FUNDS_FOR_REVERSAL`.
 
+## Transactional outbox publisher
+
+`OutboxPublisher` claims due rows with `FOR UPDATE SKIP LOCKED` through the existing outbox repository, publishes each event through `SqsEventPublisher`, and marks `published_at` only after the broker confirms the send. A broker failure increments the persisted attempt counter, stores a bounded error message and schedules exponential backoff in the same SQL transaction.
+
+The lock is held while the batch is published and updated, so concurrent publisher instances claim disjoint rows. The delivery guarantee is at-least-once: a process crash after SQS accepts a message but before the database commit can cause a duplicate publication. FIFO `MessageDeduplicationId` uses the event id for broker-side deduplication during its deduplication window; consumers must still be idempotent through the inbox and event id.
+
+The publisher starts with the NestJS application unless `OUTBOX_PUBLISHER_ENABLED=false`. Batch size and interval are configurable through `OUTBOX_PUBLISHER_BATCH_SIZE` and `OUTBOX_PUBLISHER_INTERVAL_MS`.
+
 ## Known limitations at this stage
 
-SQS consumer and outbox publisher have not been implemented yet. Persistence, the core transaction use case, pending-reference worker and HTTP boundary now have integration/manual coverage against real PostgreSQL. Authentication remains intentionally out of scope.
+The SQS consumer has not been implemented yet. Persistence, the core transaction use case, pending-reference worker, HTTP boundary and outbox publisher now have integration/manual coverage against real PostgreSQL and MiniStack. Authentication remains intentionally out of scope.
 
 ## HTTP boundary
 
