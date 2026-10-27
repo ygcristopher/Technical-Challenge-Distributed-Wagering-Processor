@@ -51,9 +51,25 @@ The lock is held while the batch is published and updated, so concurrent publish
 
 The publisher starts with the NestJS application unless `OUTBOX_PUBLISHER_ENABLED=false`. Batch size and interval are configurable through `OUTBOX_PUBLISHER_BATCH_SIZE` and `OUTBOX_PUBLISHER_INTERVAL_MS`.
 
+## SQS transaction consumer
+
+The transaction consumer reads only `SQS_QUEUE_NAME` (`wager-transactions.fifo`). Outbox integration events are sent to the separate `SQS_EVENTS_QUEUE_NAME` (`wager-events.fifo`) so the application does not consume its own published events as provider commands.
+
+For each received message, the consumer validates the command, inserts or locks the `(consumer_name, message_id)` inbox row, executes `ProcessWagerTransactionUseCase.executeInContext` and marks the inbox processed in the same PostgreSQL transaction. Only after that transaction commits does it issue `DeleteMessage` to SQS. A database rollback leaves the message visible for redelivery; a delete failure is also safe because a later delivery sees the processed inbox row and only acknowledges the message.
+
+Business outcomes such as insufficient funds are committed as processed input messages, because they are valid commands with a deterministic rejection. Invalid JSON, invalid command shape, idempotency conflicts and infrastructure failures are not deleted; SQS redelivers them and the queue redrive policy moves poison messages to the FIFO DLQ after `maxReceiveCount`. The consumer uses long polling, configurable visibility timeout and a graceful stop that aborts the current receive, stops new receives and waits for the active message transaction to finish.
+
+The consumer starts with the NestJS application unless `SQS_CONSUMER_ENABLED=false`. `SQS_CONSUMER_NAME`, `SQS_CONSUMER_WAIT_SECONDS`, `SQS_CONSUMER_VISIBILITY_TIMEOUT` and `SQS_CONSUMER_BATCH_SIZE` control its identity and polling behavior.
+
+## Observability
+
+`JsonLogger` emits one JSON object per application event with timestamp, level, event name and safe identifiers such as `correlationId`, `messageId`, `transactionId` and `walletId`. Financial payloads and complete message bodies are deliberately excluded.
+
+`MetricsRegistry` exposes counters, gauges and latency summaries in Prometheus text format at `GET /metrics`. The current metrics include transaction status, duplicate/replay count, retry count by component, SQS failures and DLQ candidates, database lock conflicts, outbox lag and operation latency. Labels are normalized and escaped before rendering.
+
 ## Known limitations at this stage
 
-The SQS consumer has not been implemented yet. Persistence, the core transaction use case, pending-reference worker, HTTP boundary and outbox publisher now have integration/manual coverage against real PostgreSQL and MiniStack. Authentication remains intentionally out of scope.
+Multi-process kill/restart tests and the final consumer failure-injection scenarios remain in the later test stage. Persistence, the core transaction use case, pending-reference worker, HTTP boundary, outbox publisher, SQS consumer and observability components now have coverage against real PostgreSQL and MiniStack. Authentication remains intentionally out of scope.
 
 ## HTTP boundary
 
