@@ -11,6 +11,8 @@ import { ProcessWagerTransactionUseCase } from './application/wagering/process-w
 import { WalletApplicationService } from './application/wallets/wallet.application-service.js';
 import { WalletController } from './interfaces/http/wallet.controller.js';
 import { WageringController } from './interfaces/http/wagering.controller.js';
+import { OUTBOX_EVENT_PUBLISHER, OutboxPublisher } from './application/messaging/outbox.publisher.js';
+import { SqsEventPublisher } from './infrastructure/messaging/sqs-event-publisher.js';
 
 @Module({
   imports: [MikroOrmModule.forRoot(databaseConfig)],
@@ -24,6 +26,9 @@ import { WageringController } from './interfaces/http/wagering.controller.js';
     },
     ProcessWagerTransactionUseCase,
     WalletApplicationService,
+    SqsEventPublisher,
+    { provide: OUTBOX_EVENT_PUBLISHER, useExisting: SqsEventPublisher },
+    OutboxPublisher,
     { provide: APP_GUARD, useClass: NoopAuthGuard },
   ],
 })
