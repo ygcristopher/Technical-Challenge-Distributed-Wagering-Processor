@@ -68,6 +68,27 @@ describe('WagerTransaction', () => {
     expect(transaction.isTerminal()).toBe(true);
   });
 
+  test('persists reference retry attempts with backoff and expiry rules', () => {
+    const transaction = WagerTransaction.create({
+      ...createProps(WagerTransactionKind.Refund),
+      referenceExternalTransactionId: 'bet-retry',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    const now = new Date('2026-01-01T00:00:00.000Z');
+
+    transaction.markPendingReference(now);
+    transaction.scheduleReferenceRetry(now);
+    expect(transaction.attempts).toBe(1);
+    expect(transaction.nextAttemptAt?.toISOString()).toBe('2026-01-01T00:00:01.000Z');
+    expect(transaction.hasReferenceRetryExpired(new Date('2026-01-01T00:30:00.000Z'))).toBe(false);
+
+    for (let attempt = 1; attempt < 8; attempt += 1) {
+      transaction.scheduleReferenceRetry(now);
+    }
+    expect(transaction.attempts).toBe(8);
+    expect(transaction.hasReferenceRetryExpired(now)).toBe(true);
+  });
+
   test('terminal transactions cannot transition again', () => {
     const transaction = WagerTransaction.create(createProps());
     transaction.reject(FailureCode.InsufficientFunds);
