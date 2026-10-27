@@ -52,7 +52,11 @@ export interface WagerTransactionState extends CreateWagerTransactionProps {
   readonly referenceTransactionId?: string;
   readonly failureCode?: FailureCode;
   readonly processedAt?: Date;
+  readonly attempts: number;
+  readonly nextAttemptAt?: Date;
 }
+
+const REFERENCE_RETRY_BACKOFF_MILLISECONDS = [1000, 5000, 30000, 300000, 900000] as const;
 
 export class WagerTransaction {
   private constructor(
@@ -73,6 +77,8 @@ export class WagerTransaction {
     private _referenceTransactionId: string | undefined,
     private _failureCode: FailureCode | undefined,
     private _processedAt: Date | undefined,
+    private _attempts: number,
+    private _nextAttemptAt: Date | undefined,
   ) {}
 
   static create(props: CreateWagerTransactionProps): WagerTransaction {
@@ -80,7 +86,7 @@ export class WagerTransaction {
       throw new InvalidDomainInputError('OPENING transactions are internal only');
     }
 
-    return WagerTransaction.build(props, WagerTransactionStatus.Pending, undefined, undefined, undefined);
+    return WagerTransaction.build(props, WagerTransactionStatus.Pending, undefined, undefined, undefined, 0, undefined);
   }
 
   static createOpening(props: Omit<CreateWagerTransactionProps, 'kind'>): WagerTransaction {
@@ -89,6 +95,8 @@ export class WagerTransaction {
       WagerTransactionStatus.Pending,
       undefined,
       undefined,
+      undefined,
+      0,
       undefined,
     );
   }
@@ -100,6 +108,8 @@ export class WagerTransaction {
       state.referenceTransactionId,
       state.failureCode,
       state.processedAt,
+      state.attempts,
+      state.nextAttemptAt,
     );
   }
 
@@ -119,6 +129,14 @@ export class WagerTransaction {
     return this._processedAt ? new Date(this._processedAt.getTime()) : undefined;
   }
 
+  get attempts(): number {
+    return this._attempts;
+  }
+
+  get nextAttemptAt(): Date | undefined {
+    return this._nextAttemptAt ? new Date(this._nextAttemptAt.getTime()) : undefined;
+  }
+
   markProcessed(referenceTransactionId: string | undefined, at: Date): void {
     this.assertMutable();
     if (this.requiresReference() && !referenceTransactionId) {
@@ -129,26 +147,47 @@ export class WagerTransaction {
     this._referenceTransactionId = referenceTransactionId;
     this._failureCode = undefined;
     this._processedAt = new Date(at.getTime());
+    this._nextAttemptAt = undefined;
   }
 
-  markPendingReference(): void {
+  markPendingReference(at = new Date()): void {
     this.assertMutable();
     if (!this.requiresReference()) {
       throw new InvalidDomainInputError('Only reference-based transactions can wait for a reference');
     }
     this._status = WagerTransactionStatus.PendingReference;
+    this._nextAttemptAt = new Date(at.getTime());
+  }
+
+  scheduleReferenceRetry(now: Date): void {
+    this.assertMutable();
+    if (this._status !== WagerTransactionStatus.PendingReference) {
+      throw new InvalidDomainInputError('Only pending references can be retried');
+    }
+
+    this._attempts += 1;
+    const backoffIndex = Math.min(this._attempts - 1, REFERENCE_RETRY_BACKOFF_MILLISECONDS.length - 1);
+    const delay = REFERENCE_RETRY_BACKOFF_MILLISECONDS[backoffIndex] ?? 900000;
+    this._nextAttemptAt = new Date(now.getTime() + delay);
+  }
+
+  hasReferenceRetryExpired(now: Date, maxAttempts = 8, maxAgeMilliseconds = 3600000): boolean {
+    return this._attempts >= maxAttempts
+      || now.getTime() - this.createdAt.getTime() >= maxAgeMilliseconds;
   }
 
   reject(code: FailureCode): void {
     this.assertMutable();
     this._status = WagerTransactionStatus.Rejected;
     this._failureCode = code;
+    this._nextAttemptAt = undefined;
   }
 
   fail(code: FailureCode): void {
     this.assertMutable();
     this._status = WagerTransactionStatus.Failed;
     this._failureCode = code;
+    this._nextAttemptAt = undefined;
   }
 
   isTerminal(): boolean {
@@ -201,6 +240,8 @@ export class WagerTransaction {
     referenceTransactionId: string | undefined,
     failureCode: FailureCode | undefined,
     processedAt: Date | undefined,
+    attempts: number,
+    nextAttemptAt: Date | undefined,
   ): WagerTransaction {
     if (!props.id || !props.providerId || !props.externalTransactionId || !props.idempotencyKey || !props.payloadHash) {
       throw new InvalidDomainInputError('Transaction identity fields are required');
@@ -236,6 +277,8 @@ export class WagerTransaction {
       referenceTransactionId,
       failureCode,
       processedAt ? new Date(processedAt.getTime()) : undefined,
+      attempts,
+      nextAttemptAt ? new Date(nextAttemptAt.getTime()) : undefined,
     );
   }
 
