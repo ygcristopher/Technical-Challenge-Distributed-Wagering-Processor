@@ -67,9 +67,17 @@ The consumer starts with the NestJS application unless `SQS_CONSUMER_ENABLED=fal
 
 `MetricsRegistry` exposes counters, gauges and latency summaries in Prometheus text format at `GET /metrics`. The current metrics include transaction status, duplicate/replay count, retry count by component, SQS failures and DLQ candidates, database lock conflicts, outbox lag and operation latency. Labels are normalized and escaped before rendering.
 
+## Multi-process validation
+
+`test/integration/multi-process.integration.test.ts` starts three real NestJS processes with `Bun.spawn`, sharing PostgreSQL and MiniStack. Concurrent bets validate that pessimistic locking plus retry of transient PostgreSQL deadlocks produces one accepted debit and one deterministic insufficient-funds rejection per wallet. The test also validates the materialized balance through reconciliation and checks that the ledger contains only one debit.
+
+The crash-recovery scenario pauses a real SQS consumer after committing the database transaction but before `DeleteMessage`, terminates it, waits for visibility timeout and starts another process. The inbox unique key makes redelivery harmless: the second process acknowledges the message without applying the credit again. This models the at-least-once window between broker acknowledgment and database commit/observation.
+
+`SQS_CONSUMER_PAUSE_BEFORE_DELETE_MS` is a test-only failure-injection hook and must remain disabled in production.
+
 ## Known limitations at this stage
 
-Multi-process kill/restart tests and the final consumer failure-injection scenarios remain in the later test stage. Persistence, the core transaction use case, pending-reference worker, HTTP boundary, outbox publisher, SQS consumer and observability components now have coverage against real PostgreSQL and MiniStack. Authentication remains intentionally out of scope.
+The required multi-process concurrency and crash-before-ack scenarios are covered. The remaining work is documentation and optional load testing; authentication remains intentionally out of scope. The delivery model remains at-least-once, so consumers outside this service must also be idempotent.
 
 ## HTTP boundary
 
