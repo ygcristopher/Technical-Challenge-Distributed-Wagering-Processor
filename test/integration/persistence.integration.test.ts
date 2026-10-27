@@ -17,6 +17,7 @@ import {
   ProcessWagerTransactionInput,
   ProcessWagerTransactionUseCase,
 } from '../../src/application/wagering/process-wager-transaction.use-case.js';
+import { PendingReferenceWorker } from '../../src/application/wagering/pending-reference.worker.js';
 
 describe('MikroORM persistence and UnitOfWork', () => {
   let orm: MikroORM;
@@ -193,5 +194,157 @@ describe('MikroORM persistence and UnitOfWork', () => {
       [walletId],
     );
     expect(count[0]?.count).toBe('1');
+  });
+
+  test('processes a REFUND that arrived before its BET reference', async () => {
+    const walletId = randomUUID();
+    const playerId = randomUUID();
+    const betExternalId = `bet-reference-${randomUUID()}`;
+    const refundExternalId = `refund-reference-${randomUUID()}`;
+    await unitOfWork.execute(({ wallets }) => wallets.save(Wallet.open({
+      id: walletId,
+      playerId,
+      initialBalance: Money.from({ amount: '100.00', currency: 'BRL' }),
+    })));
+
+    const useCase = new ProcessWagerTransactionUseCase(unitOfWork);
+    const refund = await useCase.execute({
+      providerId: 'provider-reference',
+      externalTransactionId: refundExternalId,
+      idempotencyKey: `refund-key-${randomUUID()}`,
+      payloadHash: 'e'.repeat(64),
+      walletId,
+      playerId,
+      roundId: 'round-reference',
+      gameId: 'game-reference',
+      kind: WagerTransactionKind.Refund,
+      money: { amount: '20.00', currency: 'BRL' },
+      referenceExternalTransactionId: betExternalId,
+    });
+    expect(refund.ok && refund.value.transaction.status).toBe(WagerTransactionStatus.PendingReference);
+
+    const bet = await useCase.execute({
+      providerId: 'provider-reference',
+      externalTransactionId: betExternalId,
+      idempotencyKey: `bet-key-${randomUUID()}`,
+      payloadHash: 'f'.repeat(64),
+      walletId,
+      playerId,
+      roundId: 'round-reference',
+      gameId: 'game-reference',
+      kind: WagerTransactionKind.Bet,
+      money: { amount: '20.00', currency: 'BRL' },
+    });
+    expect(bet.ok).toBe(true);
+
+    const worker = new PendingReferenceWorker(unitOfWork);
+    const result = await worker.runOnce(new Date(), 10);
+    expect(result.processed).toBe(1);
+
+    const state = await unitOfWork.execute(async (context) => ({
+      wallet: await context.wallets.findById(walletId),
+      refund: await context.transactions.findByExternalId('provider-reference', refundExternalId),
+    }));
+    expect(state.wallet?.balance.toString()).toBe('100.00');
+    expect(state.refund?.status).toBe(WagerTransactionStatus.Processed);
+  });
+
+  test('rejects a pending reference after its retry age is exhausted', async () => {
+    const walletId = randomUUID();
+    const playerId = randomUUID();
+    const createdAt = new Date(Date.now() - 3_600_001);
+    const externalTransactionId = `refund-expired-${randomUUID()}`;
+    await unitOfWork.execute(({ wallets }) => wallets.save(Wallet.open({
+      id: walletId,
+      playerId,
+      initialBalance: Money.from({ amount: '100.00', currency: 'BRL' }),
+    })));
+
+    const useCase = new ProcessWagerTransactionUseCase(unitOfWork);
+    await useCase.execute({
+      providerId: 'provider-expired-reference',
+      externalTransactionId,
+      idempotencyKey: `expired-key-${randomUUID()}`,
+      payloadHash: '1'.repeat(64),
+      walletId,
+      playerId,
+      roundId: 'round-expired',
+      gameId: 'game-expired',
+      kind: WagerTransactionKind.Refund,
+      money: { amount: '10.00', currency: 'BRL' },
+      referenceExternalTransactionId: `missing-${randomUUID()}`,
+      occurredAt: createdAt,
+    });
+
+    const worker = new PendingReferenceWorker(unitOfWork);
+    const result = await worker.runOnce(new Date(), 10);
+    expect(result.rejected).toBe(1);
+
+    const transaction = await unitOfWork.execute(({ transactions }) =>
+      transactions.findByExternalId('provider-expired-reference', externalTransactionId));
+    expect(transaction?.status).toBe(WagerTransactionStatus.Rejected);
+    expect(transaction?.failureCode).toBe(FailureCode.ReferenceNotFound);
+  });
+
+  test('rolls back a BET once and rejects a second rollback', async () => {
+    const walletId = randomUUID();
+    const playerId = randomUUID();
+    const betExternalId = `bet-rollback-${randomUUID()}`;
+    await unitOfWork.execute(({ wallets }) => wallets.save(Wallet.open({
+      id: walletId,
+      playerId,
+      initialBalance: Money.from({ amount: '100.00', currency: 'BRL' }),
+    })));
+
+    const useCase = new ProcessWagerTransactionUseCase(unitOfWork);
+    const bet = await useCase.execute({
+      providerId: 'provider-rollback',
+      externalTransactionId: betExternalId,
+      idempotencyKey: `bet-key-${randomUUID()}`,
+      payloadHash: '2'.repeat(64),
+      walletId,
+      playerId,
+      roundId: 'round-rollback',
+      gameId: 'game-rollback',
+      kind: WagerTransactionKind.Bet,
+      money: { amount: '30.00', currency: 'BRL' },
+    });
+    expect(bet.ok).toBe(true);
+
+    const rollbackInput: ProcessWagerTransactionInput = {
+      providerId: 'provider-rollback',
+      externalTransactionId: `rollback-${randomUUID()}`,
+      idempotencyKey: `rollback-key-${randomUUID()}`,
+      payloadHash: '3'.repeat(64),
+      walletId,
+      playerId,
+      roundId: 'round-rollback',
+      gameId: 'game-rollback',
+      kind: WagerTransactionKind.Rollback,
+      money: { amount: '30.00', currency: 'BRL' },
+      referenceExternalTransactionId: betExternalId,
+    };
+    const first = await useCase.execute(rollbackInput);
+    expect(first.ok && first.value.transaction.status).toBe(WagerTransactionStatus.PendingReference);
+
+    const worker = new PendingReferenceWorker(unitOfWork);
+    expect((await worker.runOnce(new Date(), 10)).processed).toBe(1);
+
+    const second = await useCase.execute({
+      ...rollbackInput,
+      id: randomUUID(),
+      externalTransactionId: `rollback-${randomUUID()}`,
+      idempotencyKey: `rollback-key-${randomUUID()}`,
+      payloadHash: '4'.repeat(64),
+    });
+    expect(second.ok && second.value.transaction.status).toBe(WagerTransactionStatus.PendingReference);
+    expect((await worker.runOnce(new Date(), 10)).rejected).toBe(1);
+
+    const state = await unitOfWork.execute(async (context) => ({
+      wallet: await context.wallets.findById(walletId),
+      transaction: await context.transactions.findByExternalId('provider-rollback', second.ok ? second.value.transaction.externalTransactionId : ''),
+    }));
+    expect(state.wallet?.balance.toString()).toBe('100.00');
+    expect(state.transaction?.failureCode).toBe(FailureCode.AlreadyReversed);
   });
 });
