@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Injectable } from '@nestjs/common';
 import { IntegrationEvent } from '../../domain/integration-events.js';
 import {
   FailureCode,
@@ -53,6 +54,7 @@ export interface UseCaseError {
   readonly message: string;
 }
 
+@Injectable()
 export class ProcessWagerTransactionUseCase {
   constructor(private readonly unitOfWork: UnitOfWork) {}
 
