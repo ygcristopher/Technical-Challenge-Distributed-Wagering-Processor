@@ -1,5 +1,5 @@
 import { EntityManager, LockMode } from '@mikro-orm/postgresql';
-import { WagerTransaction } from '../../../domain/wager-transaction.js';
+import { WagerTransaction, WagerTransactionKind, WagerTransactionStatus } from '../../../domain/wager-transaction.js';
 import { WagerTransactionEntity } from '../entities/wager-transaction.entity.js';
 import { WagerTransactionMapper } from '../mappers/wager-transaction.mapper.js';
 
@@ -26,6 +26,31 @@ export class WagerTransactionRepository {
       { providerId, externalTransactionId },
       lock ? { lockMode: LockMode.PESSIMISTIC_WRITE } : undefined,
     );
+    return entity ? WagerTransactionMapper.toDomain(entity) : undefined;
+  }
+
+  async findPendingReferencesDue(now: Date, limit: number): Promise<WagerTransaction[]> {
+    const entities = await this.em.find(
+      WagerTransactionEntity,
+      { status: WagerTransactionStatus.PendingReference, nextAttemptAt: { $lte: now } },
+      {
+        orderBy: { nextAttemptAt: 'ASC', createdAt: 'ASC' },
+        limit,
+        lockMode: LockMode.PESSIMISTIC_PARTIAL_WRITE,
+      },
+    );
+    return entities.map(WagerTransactionMapper.toDomain);
+  }
+
+  async findActiveReversal(
+    referenceTransactionId: string,
+    kind: WagerTransactionKind,
+  ): Promise<WagerTransaction | undefined> {
+    const entity = await this.em.findOne(WagerTransactionEntity, {
+      referenceTransactionId,
+      kind,
+      status: { $ne: WagerTransactionStatus.Rejected },
+    });
     return entity ? WagerTransactionMapper.toDomain(entity) : undefined;
   }
 
