@@ -39,6 +39,10 @@ The initial stable business codes are `INSUFFICIENT_FUNDS`, `INSUFFICIENT_FUNDS_
 
 `ProcessWagerTransactionUseCase` is the shared application boundary for HTTP and SQS. It creates the persistent transaction before applying the effect, locks the wallet with `PESSIMISTIC_WRITE`, writes the ledger and outbox in the same SQL transaction, and returns a typed `Result` for business outcomes. A unique-key race is resolved by reopening the transaction and replaying the row that won the insert. The current stage covers `BET`, `WIN` and `LOSS`; reference resolution for `REFUND` and `ROLLBACK` is intentionally completed in the next stage.
 
+## Reference resolution
+
+`REFUND` and `ROLLBACK` are initially stored as `PENDING_REFERENCE`. `PendingReferenceWorker` claims due rows using the partial pessimistic lock (`FOR UPDATE SKIP LOCKED`), locks the referenced transaction, and applies the reversal and outbox events in the same SQL transaction. Missing or still-pending references use persisted attempts and exponential backoff. Eight attempts or one hour of age produces `REJECTED` with `REFERENCE_NOT_FOUND`. A processed reference is required; `REFUND` accepts a `BET`, while `ROLLBACK` inverts a processed balance effect and maps insufficient balance to `INSUFFICIENT_FUNDS_FOR_REVERSAL`.
+
 ## Known limitations at this stage
 
-HTTP financial endpoints, SQS consumer and outbox publisher have not been implemented yet. Persistence and the core transaction use case now have integration coverage against real PostgreSQL. Authentication remains intentionally out of scope.
+HTTP financial endpoints, SQS consumer and outbox publisher have not been implemented yet. Persistence, the core transaction use case and pending-reference worker now have integration coverage against real PostgreSQL. Authentication remains intentionally out of scope.
