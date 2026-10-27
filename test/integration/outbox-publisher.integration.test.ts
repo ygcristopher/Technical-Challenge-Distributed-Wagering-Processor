@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import {
   GetQueueUrlCommand,
+  Message,
   ReceiveMessageCommand,
   SQSClient,
   DeleteMessageCommand,
@@ -121,19 +122,32 @@ describe('transactional outbox publisher', () => {
       const queue = await client.send(new GetQueueUrlCommand({
         QueueName: process.env.SQS_EVENTS_QUEUE_NAME ?? 'wager-events.fifo',
       }));
-      const received = await client.send(new ReceiveMessageCommand({
-        QueueUrl: queue.QueueUrl,
-        MaxNumberOfMessages: 10,
-        WaitTimeSeconds: 2,
-        MessageAttributeNames: ['All'],
-      }));
-      const matching = received.Messages?.find((item) => {
-        try {
-          return JSON.parse(item.Body ?? '{}').eventId === message.eventId;
-        } catch {
-          return false;
+      let matching: Message | undefined;
+      for (let attempt = 0; attempt < 10 && matching === undefined; attempt += 1) {
+        const received = await client.send(new ReceiveMessageCommand({
+          QueueUrl: queue.QueueUrl,
+          MaxNumberOfMessages: 10,
+          WaitTimeSeconds: 1,
+          MessageAttributeNames: ['All'],
+        }));
+        matching = received.Messages?.find((item) => {
+          try {
+            return JSON.parse(item.Body ?? '{}').eventId === message.eventId;
+          } catch {
+            return false;
+          }
+        });
+        if (matching === undefined) {
+          for (const item of received.Messages ?? []) {
+            if (item.ReceiptHandle) {
+              await client.send(new DeleteMessageCommand({
+                QueueUrl: queue.QueueUrl,
+                ReceiptHandle: item.ReceiptHandle,
+              }));
+            }
+          }
         }
-      });
+      }
 
       expect(matching).toBeDefined();
       if (matching?.ReceiptHandle) {
