@@ -13,12 +13,18 @@ import { WalletController } from './interfaces/http/wallet.controller.js';
 import { WageringController } from './interfaces/http/wagering.controller.js';
 import { OUTBOX_EVENT_PUBLISHER, OutboxPublisher } from './application/messaging/outbox.publisher.js';
 import { SqsEventPublisher } from './infrastructure/messaging/sqs-event-publisher.js';
+import { SqsTransactionConsumer } from './infrastructure/messaging/sqs-transaction.consumer.js';
+import { MetricsRegistry } from './observability/metrics.registry.js';
+import { JsonLogger } from './observability/json.logger.js';
+import { MetricsController } from './interfaces/http/metrics.controller.js';
 
 @Module({
   imports: [MikroOrmModule.forRoot(databaseConfig)],
-  controllers: [HealthController, WalletController, WageringController],
+  controllers: [HealthController, WalletController, WageringController, MetricsController],
   providers: [
     HealthService,
+    MetricsRegistry,
+    JsonLogger,
     {
       provide: UnitOfWork,
       useFactory: (orm: MikroORM) => new UnitOfWork(orm),
@@ -29,6 +35,7 @@ import { SqsEventPublisher } from './infrastructure/messaging/sqs-event-publishe
     SqsEventPublisher,
     { provide: OUTBOX_EVENT_PUBLISHER, useExisting: SqsEventPublisher },
     OutboxPublisher,
+    SqsTransactionConsumer,
     { provide: APP_GUARD, useClass: NoopAuthGuard },
   ],
 })

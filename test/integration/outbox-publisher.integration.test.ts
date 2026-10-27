@@ -119,7 +119,7 @@ describe('transactional outbox publisher', () => {
     });
     try {
       const queue = await client.send(new GetQueueUrlCommand({
-        QueueName: process.env.SQS_QUEUE_NAME ?? 'wager-transactions.fifo',
+        QueueName: process.env.SQS_EVENTS_QUEUE_NAME ?? 'wager-events.fifo',
       }));
       const received = await client.send(new ReceiveMessageCommand({
         QueueUrl: queue.QueueUrl,

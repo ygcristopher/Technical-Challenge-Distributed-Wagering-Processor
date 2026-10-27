@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { IntegrationEvent } from '../../domain/integration-events.js';
 import {
   FailureCode,
@@ -24,6 +24,8 @@ import {
 } from '../../domain/shared/errors.js';
 import { Result } from '../shared/result.js';
 import { PersistenceContext, UnitOfWork } from '../../infrastructure/database/unit-of-work.js';
+import { JsonLogger } from '../../observability/json.logger.js';
+import { MetricsRegistry } from '../../observability/metrics.registry.js';
 
 export interface ProcessWagerTransactionInput {
   readonly id?: string;
@@ -41,6 +43,7 @@ export interface ProcessWagerTransactionInput {
   readonly correlationId?: string;
   readonly causationId?: string;
   readonly occurredAt?: Date;
+  readonly source?: 'http' | 'sqs' | 'unknown';
 }
 
 export interface ProcessWagerTransactionOutput {
@@ -56,21 +59,53 @@ export interface UseCaseError {
 
 @Injectable()
 export class ProcessWagerTransactionUseCase {
-  constructor(private readonly unitOfWork: UnitOfWork) {}
+  constructor(
+    private readonly unitOfWork: UnitOfWork,
+    @Optional() private readonly logger?: JsonLogger,
+    @Optional() private readonly metrics?: MetricsRegistry,
+  ) {}
 
   async execute(
     input: ProcessWagerTransactionInput,
   ): Promise<Result<ProcessWagerTransactionOutput, UseCaseError>> {
+    const startedAt = performance.now();
     try {
-      return await this.unitOfWork.execute((context) => this.process(context, input));
-    } catch (error: unknown) {
-      if (isUniqueViolation(error)) {
-        return this.resolveConcurrentInsert(input);
+      let result: Result<ProcessWagerTransactionOutput, UseCaseError>;
+      try {
+        result = await this.unitOfWork.execute((context) => this.executeInContext(context, input));
+      } catch (error: unknown) {
+        if (isUniqueViolation(error)) {
+          this.metrics?.increment('wager_idempotency_race_total', 1, { source: input.source ?? 'unknown' });
+          result = await this.resolveConcurrentInsert(input);
+        } else if (error instanceof DomainError) {
+          result = Result.err<UseCaseError>({ code: FailureCode.InvalidPayload, message: error.message });
+        } else {
+          if (isLockConflict(error)) {
+            this.metrics?.increment('database_lock_conflicts_total', 1, { operation: 'wager_transaction' });
+          }
+          result = Result.err<UseCaseError>({ code: 'PERSISTENCE_ERROR', message: 'Could not persist wager transaction' });
+        }
       }
+      this.recordResult(input, result);
+      return result;
+    } finally {
+      this.metrics?.observe('wager_transaction_latency_ms', performance.now() - startedAt, {
+        source: input.source ?? 'unknown',
+      });
+    }
+  }
+
+  async executeInContext(
+    context: PersistenceContext,
+    input: ProcessWagerTransactionInput,
+  ): Promise<Result<ProcessWagerTransactionOutput, UseCaseError>> {
+    try {
+      return await this.process(context, input);
+    } catch (error: unknown) {
       if (error instanceof DomainError) {
         return Result.err<UseCaseError>({ code: FailureCode.InvalidPayload, message: error.message });
       }
-      return Result.err<UseCaseError>({ code: 'PERSISTENCE_ERROR', message: 'Could not persist wager transaction' });
+      throw error;
     }
   }
 
@@ -203,6 +238,37 @@ export class ProcessWagerTransactionUseCase {
     ));
   }
 
+  private recordResult(
+    input: ProcessWagerTransactionInput,
+    result: Result<ProcessWagerTransactionOutput, UseCaseError>,
+  ): void {
+    const source = input.source ?? 'unknown';
+    if (!result.ok) {
+      this.metrics?.increment('wager_transactions_total', 1, { status: result.error.code, source });
+      this.logger?.warn('wager.transaction.failed', { source, failureCode: result.error.code });
+      return;
+    }
+
+    const { transaction, idempotentReplay } = result.value;
+    this.metrics?.increment('wager_transactions_total', 1, {
+      kind: transaction.kind,
+      source,
+      status: transaction.status,
+    });
+    if (idempotentReplay) {
+      this.metrics?.increment('wager_duplicates_total', 1, { source });
+    }
+    this.logger?.info('wager.transaction.completed', {
+      source,
+      transactionId: transaction.id,
+      walletId: transaction.walletId,
+      kind: transaction.kind,
+      status: transaction.status,
+      idempotentReplay,
+      failureCode: transaction.failureCode,
+    });
+  }
+
   private processedEvent(transaction: WagerTransaction, input: ProcessWagerTransactionInput): IntegrationEvent<unknown> {
     return WagerTransactionProcessed.from(transaction, this.eventContext(input));
   }
@@ -254,4 +320,15 @@ function isUniqueViolation(error: unknown): boolean {
   }
   const candidate = error as { code?: string; cause?: { code?: string } };
   return candidate.code === '23505' || candidate.cause?.code === '23505';
+}
+
+function isLockConflict(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  const candidate = error as { code?: string; cause?: { code?: string } };
+  return candidate.code === '55P03'
+    || candidate.code === '40P01'
+    || candidate.cause?.code === '55P03'
+    || candidate.cause?.code === '40P01';
 }

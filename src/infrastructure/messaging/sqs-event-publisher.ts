@@ -48,7 +48,7 @@ export class SqsEventPublisher implements OutboxEventPublisher, OnModuleDestroy 
     }
 
     const result = await this.client.send(new GetQueueUrlCommand({
-      QueueName: process.env.SQS_QUEUE_NAME ?? 'wager-transactions.fifo',
+      QueueName: process.env.SQS_EVENTS_QUEUE_NAME ?? 'wager-events.fifo',
     }));
     if (!result.QueueUrl) {
       throw new Error('SQS queue URL was not returned');
