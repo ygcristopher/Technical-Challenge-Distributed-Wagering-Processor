@@ -145,7 +145,6 @@ A configuracao local esta em [.env.example](./.env.example). Os principais contr
 ## Documentacao complementar
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md): decisoes, trade-offs, limites e algoritmos;
-- [ESTUDO.md](./ESTUDO.md): explicacao didatica etapa por etapa;
 - [infra/ministack/init-queues.sh](./infra/ministack/init-queues.sh): criacao das filas FIFO e DLQ;
 - [test/integration/multi-process.integration.test.ts](./test/integration/multi-process.integration.test.ts): concorrencia multi-processo e crash antes do ACK.
 
