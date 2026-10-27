@@ -200,6 +200,7 @@ export class SqsTransactionConsumer implements OnModuleInit, OnModuleDestroy {
       await context.inbox.save(inbox);
     });
 
+    await this.pauseBeforeDeleteIfConfigured();
     await this.client.send(new DeleteMessageCommand({
       QueueUrl: await this.getQueueUrl(),
       ReceiptHandle: message.ReceiptHandle,
@@ -250,6 +251,13 @@ export class SqsTransactionConsumer implements OnModuleInit, OnModuleDestroy {
     const receiveCount = Number.parseInt(message.Attributes?.ApproximateReceiveCount ?? '0', 10);
     const maxReceiveCount = this.readPositiveInteger(process.env.SQS_MAX_RECEIVE_COUNT, 5);
     return receiveCount >= maxReceiveCount;
+  }
+
+  private async pauseBeforeDeleteIfConfigured(): Promise<void> {
+    const milliseconds = this.readPositiveInteger(process.env.SQS_CONSUMER_PAUSE_BEFORE_DELETE_MS, 0);
+    if (milliseconds > 0) {
+      await new Promise((resolve) => setTimeout(resolve, milliseconds));
+    }
   }
 
   private logError(event: string, error: unknown, extra: Record<string, string | undefined> = {}): void {
