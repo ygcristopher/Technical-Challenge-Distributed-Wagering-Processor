@@ -5,9 +5,18 @@ import config from '../../src/infrastructure/database/mikro-orm.config.js';
 import { Money } from '../../src/domain/money.js';
 import { InboxMessage, OutboxMessage } from '../../src/domain/messages.js';
 import { WagerTransactionProcessed } from '../../src/domain/integration-events.js';
-import { WagerTransaction, WagerTransactionKind, WagerTransactionStatus } from '../../src/domain/wager-transaction.js';
+import {
+  FailureCode,
+  WagerTransaction,
+  WagerTransactionKind,
+  WagerTransactionStatus,
+} from '../../src/domain/wager-transaction.js';
 import { Wallet } from '../../src/domain/wallet.js';
 import { UnitOfWork } from '../../src/infrastructure/database/unit-of-work.js';
+import {
+  ProcessWagerTransactionInput,
+  ProcessWagerTransactionUseCase,
+} from '../../src/application/wagering/process-wager-transaction.use-case.js';
 
 describe('MikroORM persistence and UnitOfWork', () => {
   let orm: MikroORM;
@@ -113,5 +122,76 @@ describe('MikroORM persistence and UnitOfWork', () => {
 
     const found = await unitOfWork.execute(({ wallets }) => wallets.findById(walletId));
     expect(found).toBeUndefined();
+  });
+
+  test('serializes two concurrent bets against the same wallet', async () => {
+    const walletId = randomUUID();
+    await unitOfWork.execute(({ wallets }) => wallets.save(Wallet.open({
+      id: walletId,
+      playerId: randomUUID(),
+      initialBalance: Money.from({ amount: '100.00', currency: 'BRL' }),
+    })));
+
+    const useCase = new ProcessWagerTransactionUseCase(unitOfWork);
+    const inputs = [1, 2].map((index) => ({
+      providerId: 'provider-concurrency',
+      externalTransactionId: `bet-${randomUUID()}`,
+      idempotencyKey: `bet-key-${index}-${randomUUID()}`,
+      payloadHash: `${index}`.repeat(64),
+      walletId,
+      playerId: randomUUID(),
+      roundId: 'round-concurrency',
+      gameId: 'game-concurrency',
+      kind: WagerTransactionKind.Bet,
+      money: { amount: '80.00', currency: 'BRL' },
+    } satisfies ProcessWagerTransactionInput));
+
+    const results = await Promise.all(inputs.map((input) => useCase.execute(input)));
+    const processed = results.filter((result) => result.ok && result.value.transaction.status === WagerTransactionStatus.Processed);
+    const rejected = results.filter((result) => result.ok && result.value.transaction.status === WagerTransactionStatus.Rejected);
+
+    expect(processed).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]?.ok && rejected[0].value.transaction.failureCode).toBe(FailureCode.InsufficientFunds);
+
+    const state = await unitOfWork.execute(async ({ wallets }) => wallets.findById(walletId));
+    expect(state?.balance.toString()).toBe('20.00');
+  });
+
+  test('applies one effect for fifty identical requests in parallel', async () => {
+    const walletId = randomUUID();
+    await unitOfWork.execute(({ wallets }) => wallets.save(Wallet.open({
+      id: walletId,
+      playerId: randomUUID(),
+      initialBalance: Money.from({ amount: '1000.00', currency: 'BRL' }),
+    })));
+
+    const input: ProcessWagerTransactionInput = {
+      id: randomUUID(),
+      providerId: 'provider-idempotency',
+      externalTransactionId: `bet-${randomUUID()}`,
+      idempotencyKey: `same-key-${randomUUID()}`,
+      payloadHash: 'd'.repeat(64),
+      walletId,
+      playerId: randomUUID(),
+      roundId: 'round-idempotency',
+      gameId: 'game-idempotency',
+      kind: WagerTransactionKind.Bet,
+      money: { amount: '10.00', currency: 'BRL' },
+    };
+    const useCase = new ProcessWagerTransactionUseCase(unitOfWork);
+    const results = await Promise.all(Array.from({ length: 50 }, () => useCase.execute(input)));
+
+    expect(results.every((result) => result.ok)).toBe(true);
+    const replays = results.filter((result) => result.ok && result.value.idempotentReplay);
+    expect(replays).toHaveLength(49);
+
+    const state = await unitOfWork.execute(async ({ wallets }) => wallets.findById(walletId));
+    expect(state?.balance.toString()).toBe('990.00');
+    const count = await orm.em.getConnection().execute<Array<{ count: string }>>(
+      'SELECT count(*)::text AS count FROM wallet_ledger_entries WHERE wallet_id = ?',
+      [walletId],
+    );
+    expect(count[0]?.count).toBe('1');
   });
 });
