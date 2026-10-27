@@ -70,20 +70,39 @@ export class ProcessWagerTransactionUseCase {
   ): Promise<Result<ProcessWagerTransactionOutput, UseCaseError>> {
     const startedAt = performance.now();
     try {
-      let result: Result<ProcessWagerTransactionOutput, UseCaseError>;
-      try {
-        result = await this.unitOfWork.execute((context) => this.executeInContext(context, input));
-      } catch (error: unknown) {
-        if (isUniqueViolation(error)) {
-          this.metrics?.increment('wager_idempotency_race_total', 1, { source: input.source ?? 'unknown' });
-          result = await this.resolveConcurrentInsert(input);
-        } else if (error instanceof DomainError) {
-          result = Result.err<UseCaseError>({ code: FailureCode.InvalidPayload, message: error.message });
-        } else {
-          if (isLockConflict(error)) {
-            this.metrics?.increment('database_lock_conflicts_total', 1, { operation: 'wager_transaction' });
+      let result: Result<ProcessWagerTransactionOutput, UseCaseError> = Result.err<UseCaseError>({
+        code: 'PERSISTENCE_ERROR',
+        message: 'Could not persist wager transaction',
+      });
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          result = await this.unitOfWork.execute((context) => this.executeInContext(context, input));
+          break;
+        } catch (error: unknown) {
+          if (isUniqueViolation(error)) {
+            this.metrics?.increment('wager_idempotency_race_total', 1, { source: input.source ?? 'unknown' });
+            result = await this.resolveConcurrentInsert(input);
+            break;
           }
-          result = Result.err<UseCaseError>({ code: 'PERSISTENCE_ERROR', message: 'Could not persist wager transaction' });
+          if (isLockConflict(error) && attempt < 2) {
+            this.metrics?.increment('database_lock_conflicts_total', 1, { operation: 'wager_transaction' });
+            this.metrics?.increment('wager_retries_total', 1, { component: 'database_lock' });
+            await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
+            continue;
+          }
+          if (error instanceof DomainError) {
+            result = Result.err<UseCaseError>({ code: FailureCode.InvalidPayload, message: error.message });
+          } else {
+            if (isLockConflict(error)) {
+              this.metrics?.increment('database_lock_conflicts_total', 1, { operation: 'wager_transaction' });
+            }
+            this.logger?.error('wager.transaction.persistence_error', {
+              source: input.source ?? 'unknown',
+              error: error instanceof Error ? error.message : String(error),
+            });
+            result = Result.err<UseCaseError>({ code: 'PERSISTENCE_ERROR', message: 'Could not persist wager transaction' });
+          }
+          break;
         }
       }
       this.recordResult(input, result);
