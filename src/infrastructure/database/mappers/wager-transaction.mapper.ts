@@ -24,12 +24,14 @@ export class WagerTransactionMapper {
       money: Money.from({ amount: entity.moneyAmount, currency: entity.currency }),
       createdAt: new Date(entity.createdAt.getTime()),
       status: entity.status as WagerTransactionStatus,
+      attempts: entity.attempts,
       ...(entity.referenceExternalTransactionId !== null
         ? { referenceExternalTransactionId: entity.referenceExternalTransactionId }
         : {}),
       ...(entity.referenceTransactionId !== null ? { referenceTransactionId: entity.referenceTransactionId } : {}),
       ...(entity.failureCode !== null ? { failureCode: entity.failureCode as FailureCode } : {}),
       ...(entity.processedAt !== null ? { processedAt: new Date(entity.processedAt.getTime()) } : {}),
+      ...(entity.nextAttemptAt !== null ? { nextAttemptAt: new Date(entity.nextAttemptAt.getTime()) } : {}),
     };
     return WagerTransaction.rehydrate(state);
   }
@@ -57,8 +59,8 @@ export class WagerTransactionMapper {
     entity.referenceTransactionId = transaction.referenceTransactionId ?? null;
     entity.status = transaction.status;
     entity.failureCode = transaction.failureCode ?? null;
-    entity.attempts = entity.attempts ?? 0;
-    entity.nextAttemptAt = entity.nextAttemptAt ?? null;
+    entity.attempts = transaction.attempts;
+    entity.nextAttemptAt = transaction.nextAttemptAt ?? null;
     entity.createdAt = new Date(transaction.createdAt.getTime());
     entity.processedAt = transaction.processedAt ?? null;
   }
