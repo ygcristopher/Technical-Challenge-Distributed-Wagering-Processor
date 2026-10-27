@@ -1,5 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import {
+  CreateQueueCommand,
+  DeleteQueueCommand,
   GetQueueUrlCommand,
   Message,
   ReceiveMessageCommand,
@@ -103,13 +105,6 @@ describe('transactional outbox publisher', () => {
     const message = createOutboxMessage();
     await unitOfWork.execute(({ outbox }) => outbox.save(message));
 
-    const publisher = new OutboxPublisher(unitOfWork, new SqsEventPublisher());
-    const result = await publisher.runOnce(new Date('2026-10-27T00:02:00.000Z'));
-    const stored = await unitOfWork.execute(({ outbox }) => outbox.findById(message.id));
-
-    expect(result.published).toBe(1);
-    expect(stored?.publishedAt).toBeDefined();
-
     const client = new SQSClient({
       region: process.env.AWS_REGION ?? 'us-east-1',
       endpoint: process.env.AWS_ENDPOINT ?? 'http://localhost:4566',
@@ -118,14 +113,32 @@ describe('transactional outbox publisher', () => {
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY ?? 'test',
       },
     });
+    const previousQueueName = process.env.SQS_EVENTS_QUEUE_NAME;
+    const testQueueName = `wager-events-test-${randomUUID()}.fifo`;
+    let testQueueUrl: string | undefined;
     try {
-      const queue = await client.send(new GetQueueUrlCommand({
-        QueueName: process.env.SQS_EVENTS_QUEUE_NAME ?? 'wager-events.fifo',
+      const queue = await client.send(new CreateQueueCommand({
+        QueueName: testQueueName,
+        Attributes: {
+          FifoQueue: 'true',
+          ContentBasedDeduplication: 'false',
+        },
       }));
+      testQueueUrl = queue.QueueUrl;
+      process.env.SQS_EVENTS_QUEUE_NAME = testQueueName;
+
+      const publisher = new OutboxPublisher(unitOfWork, new SqsEventPublisher());
+      const result = await publisher.runOnce(new Date('2026-10-27T00:02:00.000Z'));
+      const stored = await unitOfWork.execute(({ outbox }) => outbox.findById(message.id));
+
+      expect(result.published).toBe(1);
+      expect(stored?.publishedAt).toBeDefined();
+
+      const matchingQueue = await client.send(new GetQueueUrlCommand({ QueueName: testQueueName }));
       let matching: Message | undefined;
       for (let attempt = 0; attempt < 10 && matching === undefined; attempt += 1) {
         const received = await client.send(new ReceiveMessageCommand({
-          QueueUrl: queue.QueueUrl,
+          QueueUrl: matchingQueue.QueueUrl,
           MaxNumberOfMessages: 10,
           WaitTimeSeconds: 1,
           MessageAttributeNames: ['All'],
@@ -141,7 +154,7 @@ describe('transactional outbox publisher', () => {
           for (const item of received.Messages ?? []) {
             if (item.ReceiptHandle) {
               await client.send(new DeleteMessageCommand({
-                QueueUrl: queue.QueueUrl,
+                QueueUrl: matchingQueue.QueueUrl,
                 ReceiptHandle: item.ReceiptHandle,
               }));
             }
@@ -152,11 +165,19 @@ describe('transactional outbox publisher', () => {
       expect(matching).toBeDefined();
       if (matching?.ReceiptHandle) {
         await client.send(new DeleteMessageCommand({
-          QueueUrl: queue.QueueUrl,
+          QueueUrl: matchingQueue.QueueUrl,
           ReceiptHandle: matching.ReceiptHandle,
         }));
       }
     } finally {
+      if (testQueueUrl) {
+        await client.send(new DeleteQueueCommand({ QueueUrl: testQueueUrl }));
+      }
+      if (previousQueueName === undefined) {
+        delete process.env.SQS_EVENTS_QUEUE_NAME;
+      } else {
+        process.env.SQS_EVENTS_QUEUE_NAME = previousQueueName;
+      }
       client.destroy();
     }
   });
