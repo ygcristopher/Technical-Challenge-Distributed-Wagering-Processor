@@ -68,25 +68,29 @@ Os testes de integracao exigem PostgreSQL e MiniStack ativos. Eles nao mockam es
 
 ### Wallets
 
-- `POST /wallets`: cria uma wallet. Campos: `playerId`, `currency` e `initialBalance` opcional.
+- `POST /wallets`: cria uma wallet. Campos: `playerId` e `initialBalance: { amount, currency }`.
 - `GET /wallets?playerId=...&currency=BRL`: consulta por jogador e moeda.
 - `GET /wallets/:walletId`: consulta por id.
 - `GET /wallets/:walletId/ledger?limit=50&cursor=...`: ledger imutavel paginado.
-- `GET /wallets/:walletId/reconciliation`: compara saldo materializado com saldo reconstruido do ledger.
+- `GET /wallets/:walletId/reconciliation` ou `POST /wallets/:walletId/reconciliation`: compara saldo materializado com saldo reconstruido do ledger.
+- `GET /wagering/transactions/:transactionId`: consulta por id interno.
+- `GET /providers/:providerId/wagering/transactions/:externalTransactionId`: consulta por id externo.
 
 Exemplo de criacao:
 
 ```json
 {
   "playerId": "player-1",
-  "currency": "BRL",
-  "initialBalance": "100.00"
+  "initialBalance": {
+    "amount": "100.00",
+    "currency": "BRL"
+  }
 }
 ```
 
 ### Wagering
 
-`POST /wagering/transactions` exige `Idempotency-Key`. O corpo contem `providerId`, `externalTransactionId`, `walletId`, `playerId`, `roundId`, `gameId`, `kind`, `amount`, `currency` e, para `REFUND`/`ROLLBACK`, `referenceExternalTransactionId`.
+`POST /wagering/transactions` exige `Idempotency-Key`. O corpo contem `providerId`, `externalTransactionId`, `walletId`, `playerId`, `roundId`, `gameId`, `kind`, `money: { amount, currency }` e, para `REFUND`/`ROLLBACK`, `referenceExternalTransactionId`. O formato legado com `amount` e `currency` no nivel principal continua aceito para compatibilidade.
 
 Exemplo:
 
@@ -105,8 +109,10 @@ Content-Type: application/json
   "roundId": "round-1",
   "gameId": "game-1",
   "kind": "BET",
-  "amount": "80.00",
-  "currency": "BRL"
+  "money": {
+    "amount": "80.00",
+    "currency": "BRL"
+  }
 }
 ```
 
@@ -138,6 +144,7 @@ A configuracao local esta em [.env.example](./.env.example). Os principais contr
 - `DATABASE_URL`, `AWS_ENDPOINT` e credenciais locais;
 - `SQS_CONSUMER_ENABLED`, `SQS_CONSUMER_NAME`, batch, visibility timeout e long polling;
 - `OUTBOX_PUBLISHER_ENABLED`, intervalo e tamanho do lote;
+- `PENDING_REFERENCE_WORKER_ENABLED` e `PENDING_REFERENCE_WORKER_INTERVAL_MS`;
 - `SQS_QUEUE_NAME`, `SQS_EVENTS_QUEUE_NAME` e `SQS_DLQ_NAME`.
 
 `SQS_CONSUMER_PAUSE_BEFORE_DELETE_MS` e um hook exclusivo dos testes de crash recovery; nao deve ser habilitado em producao.
