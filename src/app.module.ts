@@ -17,10 +17,12 @@ import { SqsTransactionConsumer } from './infrastructure/messaging/sqs-transacti
 import { MetricsRegistry } from './observability/metrics.registry.js';
 import { JsonLogger } from './observability/json.logger.js';
 import { MetricsController } from './interfaces/http/metrics.controller.js';
+import { TransactionQueryController } from './interfaces/http/transaction-query.controller.js';
+import { PendingReferenceWorker } from './application/wagering/pending-reference.worker.js';
 
 @Module({
   imports: [MikroOrmModule.forRoot(databaseConfig)],
-  controllers: [HealthController, WalletController, WageringController, MetricsController],
+  controllers: [HealthController, WalletController, WageringController, MetricsController, TransactionQueryController],
   providers: [
     HealthService,
     MetricsRegistry,
@@ -36,6 +38,7 @@ import { MetricsController } from './interfaces/http/metrics.controller.js';
     { provide: OUTBOX_EVENT_PUBLISHER, useExisting: SqsEventPublisher },
     OutboxPublisher,
     SqsTransactionConsumer,
+    PendingReferenceWorker,
     { provide: APP_GUARD, useClass: NoopAuthGuard },
   ],
 })
