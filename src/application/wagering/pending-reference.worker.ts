@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import {
   IntegrationEvent,
   WalletBalanceChanged,
@@ -26,8 +27,28 @@ export interface PendingReferenceWorkerResult {
 
 const DEFAULT_BATCH_SIZE = 50;
 
-export class PendingReferenceWorker {
+@Injectable()
+export class PendingReferenceWorker implements OnModuleInit, OnModuleDestroy {
+  private timer: ReturnType<typeof setInterval> | undefined;
+  private activeRun: Promise<PendingReferenceWorkerResult> | undefined;
+  private stopping = false;
+
   constructor(private readonly unitOfWork: UnitOfWork) {}
+
+  onModuleInit(): void {
+    if (process.env.PENDING_REFERENCE_WORKER_ENABLED === 'false') return;
+    const interval = this.readPositiveInteger(process.env.PENDING_REFERENCE_WORKER_INTERVAL_MS, 1000);
+    this.timer = setInterval(() => {
+      void this.runScheduled();
+    }, interval);
+    void this.runScheduled();
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    this.stopping = true;
+    if (this.timer) clearInterval(this.timer);
+    await this.activeRun;
+  }
 
   async runOnce(now = new Date(), limit = DEFAULT_BATCH_SIZE): Promise<PendingReferenceWorkerResult> {
     return this.unitOfWork.execute(async (context) => {
@@ -41,6 +62,25 @@ export class PendingReferenceWorker {
 
       return result;
     });
+  }
+
+  private async runScheduled(): Promise<void> {
+    if (this.stopping || this.activeRun) return;
+    this.activeRun = this.runOnce()
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(JSON.stringify({ event: 'pending_reference.worker_failed', error: message }));
+        return { claimed: 0, processed: 0, retried: 0, rejected: 0 };
+      })
+      .finally(() => {
+        this.activeRun = undefined;
+      });
+    await this.activeRun;
+  }
+
+  private readPositiveInteger(value: string | undefined, fallback: number): number {
+    const parsed = Number.parseInt(value ?? '', 10);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
   }
 
   private async processOne(
@@ -123,6 +163,9 @@ export class PendingReferenceWorker {
     reference: WagerTransaction,
   ): FailureCode | undefined {
     if (reference.walletId !== transaction.walletId || reference.playerId !== transaction.playerId) {
+      return FailureCode.InvalidReferenceKind;
+    }
+    if (reference.roundId !== transaction.roundId) {
       return FailureCode.InvalidReferenceKind;
     }
     if (!reference.money.equals(transaction.money)) {
