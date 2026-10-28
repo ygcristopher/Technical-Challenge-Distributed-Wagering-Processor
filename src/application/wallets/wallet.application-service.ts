@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { Decimal } from 'decimal.js';
-import { Money } from '../../domain/money.js';
+import { Money, MoneyProps } from '../../domain/money.js';
 import { Wallet } from '../../domain/wallet.js';
 import { DomainError } from '../../domain/shared/errors.js';
 import { LedgerDirection } from '../../domain/ledger-direction.js';
@@ -15,8 +15,8 @@ import { UnitOfWork } from '../../infrastructure/database/unit-of-work.js';
 export interface CreateWalletInput {
   readonly id?: string;
   readonly playerId: string;
-  readonly currency: string;
-  readonly initialBalance: string;
+  readonly currency?: string;
+  readonly initialBalance: MoneyProps;
 }
 
 export interface ReconciliationOutput {
@@ -38,7 +38,7 @@ export class WalletApplicationService {
       const wallet = Wallet.open({
         id: input.id ?? randomUUID(),
         playerId: input.playerId,
-        initialBalance: Money.from({ amount: input.initialBalance, currency: input.currency }),
+        initialBalance: Money.from(input.initialBalance),
       });
       await this.unitOfWork.execute(async (context) => {
         await context.wallets.save(wallet);
@@ -97,6 +97,17 @@ export class WalletApplicationService {
 
   async findByPlayerAndCurrency(playerId: string, currency: string): Promise<Wallet | undefined> {
     return this.unitOfWork.execute(({ wallets }) => wallets.findByPlayerAndCurrency(playerId, currency));
+  }
+
+  async findTransactionById(id: string): Promise<WagerTransaction | undefined> {
+    return this.unitOfWork.execute(({ transactions }) => transactions.findById(id));
+  }
+
+  async findTransactionByProviderAndExternalId(
+    providerId: string,
+    externalTransactionId: string,
+  ): Promise<WagerTransaction | undefined> {
+    return this.unitOfWork.execute(({ transactions }) => transactions.findByExternalId(providerId, externalTransactionId));
   }
 
   async ledger(walletId: string, limit: number, cursor?: string) {
