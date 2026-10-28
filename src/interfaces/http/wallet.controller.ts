@@ -23,7 +23,14 @@ export class WalletController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   async create(@Body() body: CreateWalletDto) {
-    const result = await this.wallets.create(body);
+    const initialBalance = typeof body.initialBalance === 'string'
+      ? { amount: body.initialBalance, currency: body.currency ?? '' }
+      : body.initialBalance;
+    const result = await this.wallets.create({
+      ...body,
+      currency: initialBalance.currency,
+      initialBalance,
+    });
     if (!result.ok) {
       if (result.error === 'CONFLICT') throw new ConflictException('Wallet already exists');
       if (result.error === 'INVALID_INPUT') throw new BadRequestException('Invalid wallet');
@@ -71,6 +78,7 @@ export class WalletController {
   }
 
   @Get(':walletId/reconciliation')
+  @Post(':walletId/reconciliation')
   async reconciliation(@Param('walletId') walletId: string) {
     const result = await this.wallets.reconcile(walletId);
     if (!result) throw new NotFoundException('Wallet not found');
