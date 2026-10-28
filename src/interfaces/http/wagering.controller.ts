@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import {
   BadRequestException,
   ConflictException,
@@ -17,6 +16,7 @@ import { ProcessWagerTransactionDto } from './wager-transaction.dto.js';
 import { WagerTransactionStatus } from '../../domain/wager-transaction.js';
 import { JsonLogger } from '../../observability/json.logger.js';
 import { MetricsRegistry } from '../../observability/metrics.registry.js';
+import { hashWagerPayload } from '../../application/shared/wager-payload-hash.js';
 
 interface HttpResponse {
   status(code: number): HttpResponse;
@@ -41,15 +41,29 @@ export class WageringController {
     const startedAt = performance.now();
     try {
       if (!idempotencyKey) throw new BadRequestException('Idempotency-Key header is required');
-      const payloadHash = createHash('sha256')
-        .update(JSON.stringify(body))
-        .digest('hex');
+      const money = body.money ?? (body.amount !== undefined && body.currency !== undefined
+        ? { amount: body.amount, currency: body.currency }
+        : undefined);
+      if (!money) throw new BadRequestException('money is required');
+      const payloadHash = hashWagerPayload({
+        providerId: body.providerId,
+        externalTransactionId: body.externalTransactionId,
+        walletId: body.walletId,
+        playerId: body.playerId,
+        roundId: body.roundId,
+        gameId: body.gameId,
+        kind: body.kind,
+        money,
+        ...(body.referenceExternalTransactionId !== undefined
+          ? { referenceExternalTransactionId: body.referenceExternalTransactionId }
+          : {}),
+      });
       const result = await this.useCase.execute({
         ...body,
         idempotencyKey,
         payloadHash,
         source: 'http',
-        money: { amount: body.amount, currency: body.currency },
+        money,
         ...(correlationId ? { correlationId } : {}),
       });
 
