@@ -1,4 +1,6 @@
-import { IsOptional, IsString, Matches, MinLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsNotEmpty, IsOptional, IsString, Matches, MinLength, ValidateIf, ValidateNested } from 'class-validator';
+import { MoneyDto } from './money.dto.js';
 
 export class CreateWalletDto {
   @IsOptional()
@@ -9,13 +11,16 @@ export class CreateWalletDto {
   @MinLength(1)
   playerId!: string;
 
+  @ValidateIf((value: CreateWalletDto) => typeof value.initialBalance === 'string')
   @IsString()
   @Matches(/^[A-Z]{3}$/)
-  currency!: string;
+  currency?: string;
 
-  @IsString()
-  @Matches(/^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/)
-  initialBalance!: string;
+  @IsNotEmpty()
+  @ValidateIf((value: CreateWalletDto) => typeof value.initialBalance === 'object')
+  @ValidateNested()
+  @Type(() => MoneyDto)
+  initialBalance!: MoneyDto | string;
 }
 
 export class WalletQueryDto {
