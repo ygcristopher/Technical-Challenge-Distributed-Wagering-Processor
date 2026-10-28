@@ -48,9 +48,9 @@ Esses resultados são rejeições determinísticas e, na API HTTP, normalmente c
 
 ## Hash de idempotência
 
-Na borda HTTP, o sistema calcula um digest SHA-256 do corpo da requisição e armazena o resultado junto de `(provider_id, idempotency_key)`. Uma repetição com a mesma chave e o mesmo hash é replay; o sistema devolve a transação original com `idempotentReplay=true`. A mesma chave com hash diferente é conflito de idempotência e corresponde a `409`.
+Na borda HTTP, o sistema calcula um digest SHA-256 de um payload de negócio canonicalizado: as propriedades são ordenadas recursivamente, valores indefinidos são omitidos e metadados como `Idempotency-Key` não entram no hash. O resultado é armazenado junto de `(provider_id, idempotency_key)`. Uma repetição com a mesma chave e o mesmo hash é replay; o sistema devolve a transação original com `idempotentReplay=true`. A mesma chave com hash diferente é conflito de idempotência e corresponde a `409`.
 
-Mensagens SQS usam o hash SHA-256 do corpo recebido. O `messageId` do SQS identifica a mensagem no Inbox, enquanto o hash identifica o conteúdo utilizado pela transação.
+Mensagens SQS são normalizadas para o mesmo payload de negócio e usam o mesmo hash canonicalizado. O `messageId` do SQS identifica a mensagem no Inbox, enquanto o hash identifica o conteúdo utilizado pela transação; assim HTTP e SQS aplicam a mesma regra de idempotência.
 
 ## Serviço de aplicação de transações
 
@@ -62,7 +62,7 @@ As operações `BET`, `WIN` e `LOSS` são aplicadas diretamente. `REFUND` e `ROL
 
 ## Resolução de referências
 
-`PendingReferenceWorker` busca transações vencidas usando lock parcial com `FOR UPDATE SKIP LOCKED`, bloqueia a referência e aplica a reversão e seus eventos na mesma transação SQL.
+`PendingReferenceWorker` é registrado no módulo Nest e inicia seu agendamento no ciclo de vida da aplicação quando `PENDING_REFERENCE_WORKER_ENABLED=true`. Ele busca transações vencidas usando lock parcial com `FOR UPDATE SKIP LOCKED`, evita execuções sobrepostas, bloqueia a referência e aplica a reversão e seus eventos na mesma transação SQL; no shutdown, interrompe o timer e aguarda a execução ativa.
 
 Referências inexistentes ou ainda pendentes usam tentativas persistidas e backoff exponencial. Oito tentativas ou uma hora de idade produzem `REJECTED` com `REFERENCE_NOT_FOUND`. A referência precisa estar processada; `REFUND` aceita uma `BET`, enquanto `ROLLBACK` inverte um efeito financeiro processado e pode produzir `INSUFFICIENT_FUNDS_FOR_REVERSAL`.
 
@@ -110,6 +110,6 @@ Os testes obrigatórios de concorrência multi-processo e crash antes do ACK est
 
 `WalletController` expõe criação e consulta de wallets, ledger paginado por cursor e reconciliação. Um saldo inicial positivo cria uma transação interna `OPENING` processada e uma entrada de crédito imutável, permitindo reconstruir o saldo pelo ledger.
 
-`WageringController` exige o header `Idempotency-Key`, calcula o hash do corpo, delega ao caso de uso e mapeia `PROCESSED` para `201`/`200`, `PENDING_REFERENCE` para `202`, rejeições de negócio para `422`, conflitos de payload para `409`, validações para `400` e indisponibilidade de persistência para `503`.
+`WageringController` exige o header `Idempotency-Key`, aceita o contrato canônico com `money: { amount, currency }` e mantém compatibilidade com o formato legado plano, calcula o hash canonicalizado, delega ao caso de uso e mapeia `PROCESSED` para `201`/`200`, `PENDING_REFERENCE` para `202`, rejeições de negócio para `422`, conflitos de payload para `409`, validações para `400` e indisponibilidade de persistência para `503`. As consultas por id interno e por `(providerId, externalTransactionId)` também são expostas.
 
 Os cursores do ledger são objetos JSON codificados em base64url contendo apenas o id da última entrada. O cursor é opaco na borda HTTP e validado antes de chegar ao repositório. O guard de autenticação no-op permanece ativo porque autenticação está fora do escopo do desafio.
