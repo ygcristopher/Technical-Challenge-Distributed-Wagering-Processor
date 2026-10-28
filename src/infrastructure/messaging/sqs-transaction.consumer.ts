@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import {
   DeleteMessageCommand,
   GetQueueUrlCommand,
@@ -16,6 +15,7 @@ import { UnitOfWork } from '../database/unit-of-work.js';
 import { WagerTransactionKind } from '../../domain/wager-transaction.js';
 import { JsonLogger } from '../../observability/json.logger.js';
 import { MetricsRegistry } from '../../observability/metrics.registry.js';
+import { hashWagerPayload } from '../../application/shared/wager-payload-hash.js';
 
 export interface SqsConsumeBatchResult {
   readonly received: number;
@@ -164,8 +164,6 @@ export class SqsTransactionConsumer implements OnModuleInit, OnModuleDestroy {
 
     const messageId = message.MessageId;
     const input = parseTransactionMessage(message.Body);
-    const payloadHash = createHash('sha256').update(message.Body).digest('hex');
-
     await this.unitOfWork.execute(async (context) => {
       const existing = await context.inbox.find(this.consumerName, messageId, true);
       if (existing?.isProcessed()) {
@@ -175,7 +173,7 @@ export class SqsTransactionConsumer implements OnModuleInit, OnModuleDestroy {
       const inbox = existing ?? InboxMessage.receive({
         consumerName: this.consumerName,
         messageId,
-        payloadHash,
+        payloadHash: input.payloadHash,
       });
       await context.inbox.save(inbox);
       const result = await this.useCase.executeInContext(context, input);
@@ -299,12 +297,12 @@ function parseTransactionMessage(body: string): ProcessWagerTransactionInput {
   const referenceExternalTransactionId = optionalString(parsed, 'referenceExternalTransactionId');
   const correlationId = optionalString(parsed, 'correlationId');
   const causationId = optionalString(parsed, 'causationId');
-  return {
+  const input: ProcessWagerTransactionInput = {
     source: 'sqs',
     providerId: requiredString(parsed, 'providerId'),
     externalTransactionId: requiredString(parsed, 'externalTransactionId'),
     idempotencyKey: requiredString(parsed, 'idempotencyKey'),
-    payloadHash: createHash('sha256').update(body).digest('hex'),
+    payloadHash: '',
     walletId: requiredString(parsed, 'walletId'),
     playerId: requiredString(parsed, 'playerId'),
     roundId: requiredString(parsed, 'roundId'),
@@ -317,6 +315,7 @@ function parseTransactionMessage(body: string): ProcessWagerTransactionInput {
     ...(causationId !== undefined ? { causationId } : {}),
     ...(occurredDate !== undefined ? { occurredAt: occurredDate } : {}),
   };
+  return { ...input, payloadHash: hashWagerPayload(input) };
 }
 
 function parseMoney(parsed: Record<string, unknown>): { amount: string; currency: string } {
