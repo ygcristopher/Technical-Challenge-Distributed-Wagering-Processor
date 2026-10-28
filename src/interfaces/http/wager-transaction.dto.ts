@@ -1,5 +1,7 @@
-import { IsEnum, IsOptional, IsString, Matches, MinLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsEnum, IsOptional, IsString, Matches, MinLength, ValidateIf, ValidateNested } from 'class-validator';
 import { WagerTransactionKind } from '../../domain/wager-transaction.js';
+import { MoneyDto } from './money.dto.js';
 
 export class ProcessWagerTransactionDto {
   @IsOptional()
@@ -33,13 +35,20 @@ export class ProcessWagerTransactionDto {
   @IsEnum(WagerTransactionKind)
   kind!: WagerTransactionKind;
 
+  @ValidateIf((value: ProcessWagerTransactionDto) => value.money === undefined)
   @IsString()
   @Matches(/^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/)
-  amount!: string;
+  amount?: string;
 
+  @ValidateIf((value: ProcessWagerTransactionDto) => value.money === undefined)
   @IsString()
   @Matches(/^[A-Z]{3}$/)
-  currency!: string;
+  currency?: string;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => MoneyDto)
+  money?: MoneyDto;
 
   @IsOptional()
   @IsString()
